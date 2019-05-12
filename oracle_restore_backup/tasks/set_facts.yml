@@ -1,0 +1,47 @@
+---
+- name: SET Facts
+  set_fact:
+    DB_NAME: "{{ DB_NAME }}"
+    DISK_GROUP: "{{ DISK_GROUP }}"
+    CATALOG_SERVER: "{{ CATALOG_SERVER }}"
+    DATE_TIME: "{{ DATE_TIME }}"
+    SOURCE: "{{ SOURCE }}"
+    TARGET: "{{ TARGET }}"
+    CLUSTER_DATABASE: "{{ CLUSTER_DATABASE }}"
+    TARGET_ORACLE_HOME: "{{ TARGET_ORACLE_HOME }}"
+  delegate_to: "{{ SOURCE }}"
+  run_once: true
+
+- name: Print Parameters
+  debug:
+    msg: "{{msgitem}}"
+    verbosity: 2
+  loop:
+    - "DB_NAME: {{ DB_NAME }}"
+    - "DISK_GROUP: {{ DISK_GROUP }}"
+    - "CATALOG_SERVER: {{ CATALOG_SERVER }}"
+    - "DATE_TIME: {{ DATE_TIME }}"
+    - "SOURCE: {{ SOURCE }}"
+    - "TARGET: {{ TARGET }}"
+    - "CLUSTER_DATABASE: {{ CLUSTER_DATABASE }}"
+    - "TARGET_ORACLE_HOME: {{ TARGET_ORACLE_HOME }}"
+  loop_control:
+    loop_var: msgitem
+  delegate_to: "{{ SOURCE }}"
+  run_once: true
+
+- name: Print TARGET_NODE2
+  debug:
+    msg: "TARGET_NODE2: {{ TARGET_NODE2 }}"
+  when:
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE2 is defined
+  run_once: True
+
+- name: Print TARGET_NODE3
+  debug:
+    msg: "TARGET_NODE3: {{ TARGET_NODE3 }}"
+  when:
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE3 is defined
+  run_once: True

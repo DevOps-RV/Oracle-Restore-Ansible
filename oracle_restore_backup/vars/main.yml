@@ -1,0 +1,7 @@
+---
+# vars file for oracle_restore_backup
+
+SOURCE_ORA_ENV: export ORACLE_HOME="{{ ORACLE_HOME.stdout }}"; export ORACLE_SID="{{ ORACLE_SID.stdout }}"; export PATH="{{ ORACLE_HOME.stdout }}"/bin:/usr/local/bin:$PATH; export LD_LIBRARY_PATH="{{ ORACLE_HOME.stdout }}"/lib;
+ASM_ENV: export ORACLE_HOME="{{ ASM_HOME.stdout }}"; export ORACLE_SID="{{ ASM_SID.stdout }}"; export PATH="{{ ASM_HOME.stdout }}"/bin:/usr/local/bin:$PATH; export LD_LIBRARY_PATH="{{ ASM_HOME.stdout }}"/lib;
+TARGET_ORA_ENV: export ORACLE_HOME="{{ TARGET_ORACLE_HOME }}"; export ORACLE_SID="{{ TARGET_ORACLE_SID }}"; export PATH="{{ TARGET_ORACLE_HOME }}"/bin:/usr/local/bin:$PATH; export LD_LIBRARY_PATH="{{ TARGET_ORACLE_HOME }}"/lib;
+

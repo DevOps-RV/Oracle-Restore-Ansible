@@ -1,0 +1,59 @@
+---
+- name: Fail if DB_NAME is not set
+  fail:
+    msg: "`DB_NAME` not defined"
+  when: DB_NAME is not defined
+  run_once: yes
+
+- name: Fail if DISK_GROUP is not set
+  fail:
+    msg: "`DISK_GROUP` not defined"
+  when: DISK_GROUP is not defined
+  run_once: yes
+
+- name: Fail if CATALOG_SERVER is not set
+  fail:
+    msg: "`CATALOG_SERVER` not defined"
+  when: CATALOG_SERVER is not defined
+  run_once: yes
+
+- name: Fail if DATE_TIME is not set
+  fail:
+    msg: "`DATE_TIME` not defined"
+  when: DATE_TIME is not defined
+  run_once: yes
+
+- name: Fail if SOURCE is not set
+  fail:
+    msg: "`SOURCE` not defined"
+  when: SOURCE is not defined
+  run_once: yes
+
+- name: Fail if TARGET is not set
+  fail:
+    msg: "`TARGET` not defined"
+  when: TARGET is not defined
+  run_once: yes
+
+- name: Fail if TARGET_ORACLE_HOME is not set
+  fail:
+    msg: "`TARGET_ORACLE_HOME` not defined"
+  when: TARGET_ORACLE_HOME is not defined
+  run_once: yes
+    
+- name: Fail if CLUSTER_DATABASE is not set
+  fail:
+    msg: "`CLUSTER_DATABASE` not defined"
+  when: CLUSTER_DATABASE is not defined
+  run_once: yes
+
+- name: Fail if TARGET_NODE2 is not set
+  fail:
+    msg: "`TARGET_NODE2` not defined"
+  when: 
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE2 is not defined
+  run_once: yes
+
+
+

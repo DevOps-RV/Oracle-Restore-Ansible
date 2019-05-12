@@ -1,0 +1,8 @@
+---
+- hosts: localhost
+  user: oracle
+  gather_facts: false
+  become: true
+  become_method: sudo
+  roles:
+    - oracle_restore_backup

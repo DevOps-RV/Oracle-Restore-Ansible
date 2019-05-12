@@ -1,0 +1,458 @@
+---
+# tasks file for oracle_restore_backup
+
+- include_tasks: 'check_vars.yml'
+- include_tasks: 'set_facts.yml'
+
+- name: Check the DB Exists or not? and get ORACLE_SID from {{ SOURCE }}
+  shell: ps -ef | grep pmon | awk '{print $8}' | grep -i {{ DB_NAME }} | awk '!/ASM/' | sed 's/^ora_pmon_//'
+  register: ORACLE_SID
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug:
+    msg: "ORACLE_SID: {{ ORACLE_SID.stdout }}"
+  run_once: True
+
+- name: Fail if DB "{{ DB_NAME }}" is not present in "{{ SOURCE }}"
+  fail:
+    msg: Entered DB Name = "{{ DB_NAME }}" is not present in "{{ SOURCE }}"
+  when: DB_NAME not in ORACLE_SID.stdout
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- name: Get ORACLE_HOME for from {{ SOURCE }}
+  shell: 'cat /etc/oratab|grep -v "^#"|grep -i {{ DB_NAME }}|cut -f2 -d:'
+  register: ORACLE_HOME
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug:
+    msg: "ORACLE_HOME: {{ ORACLE_HOME.stdout }}"
+  run_once: True
+
+- name: Get {{ DB_NAME }} DBID from {{ SOURCE }}
+  shell: |
+    {{ SOURCE_ORA_ENV }}
+    sqlplus / as sysdba <<< 'select dbid from v$database;' | awk 'FNR == 15 {print $1}'
+  register: DB_ID
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug:
+    msg: "DB_ID: {{ DB_ID.stdout }}"
+  run_once: True
+
+- name: Get {{ DB_NAME }} DB Size in MB in {{ SOURCE }}
+  shell: |
+    {{ SOURCE_ORA_ENV }}
+    sqlplus / as sysdba <<< 'SELECT SUM (bytes) / 1024 / 1024 AS MB FROM dba_data_files;' | awk 'FNR == 15 {print $1}'
+  register: SIZE
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug:
+    msg: "{{ ORACLE_SID.stdout }} DB Size : {{ SIZE.stdout }} MB"
+  run_once: True
+
+- name: Copy the logfile diskgroup Script to {{ SOURCE }}
+  copy:
+    src: logfile_diskgroup.sql
+    dest: /tmp/logfile_diskgroup.sql
+    owner: oracle
+    group: oinstall
+    mode: 0777
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- name: Get Source diskgroup name from {{ SOURCE }}
+  shell: |
+    {{ SOURCE_ORA_ENV }}
+    sqlplus -s / as sysdba '@/tmp/logfile_diskgroup.sql'
+  register: SOURCE_DISKGROUP
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug:
+    msg: "SOURCE_DISKGROUP: {{ SOURCE_DISKGROUP.stdout }}"
+  run_once: True
+
+- name: Get TARGET ASM+ SID
+  shell: ps -ef | grep pmon | awk '{print $8}' | sed 's/^asm_pmon_//' | grep ASM
+  register: ASM_SID
+  delegate_to: "{{ TARGET }}"
+  run_once: True      
+
+- debug:
+    msg: "TARGET ASM+ SID: {{ ASM_SID.stdout }}"
+  run_once: True
+
+- name: Get TARGET {{ TARGET }} ASM Home from oratab
+  shell: 'cat /etc/oratab|grep -v "^#"|grep -i ASM|cut -f2 -d:'
+  register: ASM_HOME
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug:
+    msg: "TARGET ASM_HOME: {{ ASM_HOME.stdout }}"
+  run_once: True
+
+- name: Perform Exports and Check free space available in ASM TARGET - {{ TARGET }} based on disk group
+  shell: |
+    {{ ASM_ENV }}
+    asmcmd lsdg|grep -i `echo "{{ DISK_GROUP }}" | cut -c 2-` |awk '{print $8}';
+  register: ASM_SIZE
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug:
+    msg: "ASM Disk Free Space in TARGET: {{ ASM_SIZE.stdout }} MB"
+  run_once: True
+
+- name: Fail if there no Available Disk Space at Target {{ TARGET }}
+  fail:
+    msg: "ASM Free Disk Space in {{ TARGET }}: {{ ASM_SIZE.stdout }} MB < {{ ORACLE_SID.stdout }} DB Restore of {{ SIZE.stdout }} MB"
+    verbosity: 2
+  when: ASM_SIZE.stdout|int < SIZE.stdout|int
+  run_once: True
+
+- name: Space Available at Target  {{ TARGET }} for Restore DB {{ DB_NAME }}
+  debug:
+    msg: "Space Available in Target: {{ ASM_SIZE.stdout }} MB > {{ ORACLE_SID.stdout }} DB SIZE: {{ SIZE.stdout }} MB"
+  run_once: True
+
+- name: Create Parameter File in SOURCE DB 
+  shell: |
+    {{ SOURCE_ORA_ENV }}
+    sqlplus / as sysdba <<< "create pfile='/tmp/init.ora' from spfile;"
+  register: PFILE
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- debug: var=PFILE.stdout_lines
+  run_once: True
+
+- name: Fetch the SOURCE DB parameter file to Ansible Server /tmp
+  fetch:
+    src: /tmp/init.ora
+    dest: /tmp/init.ora
+    flat: yes
+  delegate_to: "{{ SOURCE }}"
+  run_once: True
+
+- name: Copy parameter file to TARGET DB
+  copy:
+    src: /tmp/init.ora
+    dest: /tmp/
+    owner: oracle
+    group: oinstall
+    mode: 0777
+    force: yes
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Update Control_Files and DB_CREATE_FILE_DEST Parameters in init.ora
+  lineinfile:
+    path: /tmp/init.ora
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { regexp: ^\*\.control_files=.*, line: "*.control_files='{{ DISK_GROUP }}','+FLASH_DG'" }
+    - { regexp: ^\*\.db_create_file_dest, line: "*.db_create_file_dest='{{ DISK_GROUP }}'" }
+    - { regexp: ^\*\.cluster_database=.*, line: "*.cluster_database=false" }
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Adding Parameters in init.ora and oratab
+  lineinfile:
+    path: "{{ item.path }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { path: /tmp/init.ora, line: "*.db_file_name_convert='{{ SOURCE_DISKGROUP.stdout }}','{{ DISK_GROUP }}'" }
+    - { path: /tmp/init.ora, line: "*.log_file_name_convert='{{ SOURCE_DISKGROUP.stdout }}','{{ DISK_GROUP }}'" }
+    - { path: /tmp/init.ora, line: "*.db_create_online_log_dest_1='{{ DISK_GROUP }}'" }
+    - { path: /tmp/init.ora, line: "*.db_create_online_log_dest_2='+FLASH_DG'" }
+    - { path: /etc/oratab, line: "{{ DB_NAME }}:{{ TARGET_ORACLE_HOME }}:N" }
+  become: true
+  become_method: sudo
+  run_once: True
+  delegate_to: "{{ TARGET }}"
+
+- name: Create Audit_file_dest directory in {{ TARGET }}
+  file:
+    path: '/u01/app/oracle/admin/{{ DB_NAME }}/adump'
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: 0755
+    recurse: yes
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Create Symbolic link in {{ TARGET }}
+  file:
+    src: "{{ TARGET_ORACLE_HOME }}"
+    dest: "{{ ORACLE_HOME.stdout }}"
+    state: link
+  when: ORACLE_HOME.stdout != TARGET_ORACLE_HOME 
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Get {{ TARGET }} Instance Node Number
+  shell: echo {{ TARGET }}|rev |cut -c1
+  register: NODE1
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Set {{ TARGET }} ORACLE_SID
+  set_fact:
+    TARGET_ORACLE_SID: "{{ DB_NAME }}{{NODE1.stdout}}"
+
+- name: Startup nomount pfile in TARGET
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    sqlplus / as sysdba <<< 'startup nomount pfile=/tmp/init.ora;'
+  register: nomount
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=nomount.stdout_lines
+  run_once: True
+
+- name: Copy Restore Precheck File to TARGET
+  template:
+    src: restore_precheck.rcv.j2
+    dest: /tmp/restore_precheck.rcv
+    owner: oracle
+    group: oinstall
+    mode: 0777
+    force: yes
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Execute RMAN Restore Precheck Script
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    rman @'/tmp/restore_precheck.rcv'
+  register: RMAN_PRECHECK
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=RMAN_PRECHECK.stdout_lines
+  run_once: True
+
+- name: Copy the template for Restore DB
+  template:
+    src: restore.rcv.j2
+    dest: /tmp/restore.rcv
+    owner: oracle
+    group: oinstall
+    mode: 0777
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: RMAN Backup Restore in TARGET
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    rman @'/tmp/restore.rcv'
+  async: 36000
+  poll: 60
+  register: RMAN
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+  ignore_errors: True
+
+- debug: var=RMAN.stdout_lines
+  run_once: True
+
+- name: Remove symlink after completed RMAN Restore in TARGET
+  file:
+    path: "{{ ORACLE_HOME.stdout }}"
+    state: absent
+  when:  ORACLE_HOME.stdout  !=  TARGET_ORACLE_HOME 
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+#POST BACKUP STEPS - FOR BOTH RAC and STANDALONE
+
+- name: Copy the Control File Location Script
+  copy:
+    src: control_file_location.sql
+    dest: /tmp/control_file_location.sql
+    owner: oracle
+    group: oinstall
+    mode: 0777
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Invoke Control File Location Script
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    sqlplus -s / as sysdba '@/tmp/control_file_location.sql'
+  register: control_file_location
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=control_file_location.stdout_lines
+  run_once: True
+
+- name: Adding control_file_location Parameter in init.ora
+  lineinfile:
+    path: /tmp/init.ora
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+  with_items:
+    - { regexp: ^\*\.control_files=.*, line: "*.control_files={{ control_file_location.stdout }}" }
+    - { regexp: ^\*\.cluster_database=.*, line: "*.cluster_database={{ CLUSTER_DATABASE }}" }
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: Startup nomount pfile in TARGET after Restore
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    sqlplus / as sysdba <<< "shut immediate;"
+    sqlplus / as sysdba <<< 'startup nomount pfile=/tmp/init.ora;'
+  register: nmount
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=nmount.stdout_lines
+  run_once: True
+
+- name: Create SP file in Target
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    sqlplus / as sysdba <<< "create spfile='{{ DISK_GROUP }}' from pfile='/tmp/init.ora';"
+  register: SPFILE
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=SPFILE.stdout_lines
+  run_once: True
+
+- name: Findout SPFile Location in Target
+  shell: |
+    {{ ASM_ENV }}
+    asmcmd find --type PARAMETERFILE '*' '*' | grep -i {{ DB_NAME }};
+  register: SPFile_Location
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=SPFile_Location.stdout_lines
+  run_once: True
+
+- name: Copy spfile_location template
+  template:
+    src: spfile_location.j2
+    dest: "{{ TARGET_ORACLE_HOME }}/dbs/init{{ ORACLE_SID.stdout }}.ora"
+    owner: oracle
+    group: oinstall
+    mode: 0640
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- name: shut immediate
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    sqlplus / as sysdba <<< "shut immediate;"
+  register: shutdown
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=shutdown.stdout_lines
+  run_once: True
+
+- name: Register Database for Standalone or one node 
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    srvctl add database -d "{{ DB_NAME }}" -o "{{ TARGET_ORACLE_HOME }}" -p "{{ SPFile_Location.stdout }}" 
+    srvctl add instance -d "{{ DB_NAME }}" -i "{{ TARGET_ORACLE_SID }}" -n "{{ TARGET }}"
+  register: register_db
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+#FOR Cluster Database = TRUE
+# For 2 Node cluster
+
+- name: Create Audit_file_dest directory in {{ TARGET_NODE2 }}
+  file:
+    path: '/u01/app/oracle/admin/{{ DB_NAME }}/adump'
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: 0755
+    recurse: yes
+  delegate_to: "{{ TARGET_NODE2 }}"
+  when: 
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE2 is defined
+  run_once: True
+
+- name: Get 2nd Instance Node Number
+  shell: echo {{ TARGET_NODE2 }}|rev |cut -c1
+  when:
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE2 is defined
+  register: NODE2
+  delegate_to: "{{ TARGET_NODE2 }}"
+  run_once: True
+
+- name: Add 2nd Instance "{{ DB_NAME }}"2 to Cluster
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    srvctl add instance -d "{{ DB_NAME }}" -i "{{ DB_NAME }}{{ NODE2.stdout }}" -n "{{ TARGET_NODE2 }}"
+  when:
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE2 is defined
+  register: TARGET_NODE2
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+# For 3 Node cluster
+
+- name: Create Audit_file_dest directory in {{ TARGET_NODE3 }}
+  file:
+    path: /u01/app/oracle/admin/{{ DB_NAME }}/adump
+    state: directory
+    owner: oracle
+    group: oinstall
+    mode: 0755
+    recurse: yes
+  delegate_to: "{{ TARGET_NODE3 }}"
+  when: 
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE3 is defined
+  run_once: True
+
+- name: Get 3rd Instance Node Number
+  shell: echo {{ TARGET_NODE3 }}|rev |cut -c1
+  when:
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE3 is defined
+  register: NODE3
+  delegate_to: "{{ TARGET_NODE3 }}"
+  run_once: True
+
+- name: Add 3rd Instance "{{ DB_NAME }}"3 to Cluster
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    srvctl add instance -d "{{ DB_NAME }}" -i "{{ DB_NAME }}{{ NODE3.stdout }}" -n "{{ TARGET_NODE3 }}"
+  when: 
+    - CLUSTER_DATABASE == "true"
+    - TARGET_NODE3 is defined
+  register: TARGET_NODE3
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+# START DATABASE
+- name: Start Database and Show Status
+  shell: |
+    {{ TARGET_ORA_ENV }}
+    srvctl start database -d "{{ DB_NAME }}"
+    srvctl status database -d "{{ DB_NAME }}" -v
+  register: register_db
+  delegate_to: "{{ TARGET }}"
+  run_once: True
+
+- debug: var=register_db.stdout_lines
+  run_once: True

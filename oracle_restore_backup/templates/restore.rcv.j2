@@ -1,0 +1,13 @@
+connect target /;
+connect catalog rman/namr@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST={{ CATALOG_SERVER }})(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=armanp)));
+set dbid {{ DB_ID.stdout }};
+run
+{ 
+set until time "to_date('{{ DATE_TIME }}','dd-mm-yyyy HH24:MI:SS')"; 
+restore controlfile;
+alter database mount;
+restore database;
+recover database;
+alter database open resetlogs;
+}
+
