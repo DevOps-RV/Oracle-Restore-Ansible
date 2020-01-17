@@ -6,7 +6,8 @@ Requirements
 ------------
 Source, Traget hosts should have password less SSH from Ansible Server and also able to login using hostname. (E.g.: ssh database_1)
 
-Role Variables
+```
+# Role Variables
 --------------
 DB_NAME - Name of the Database.  E.g.:database_1
 DISK_GROUP - ASM Disk Group Name.  E.g.:+DATA_DG
@@ -18,7 +19,7 @@ TARGET_ORACLE_HOME - Target DB ORACLE_HOME.  E.g.: "/u01/app/oracle/product/11.2
 CLUSTER_DATABASE - True if Rac , False if Standalone.  E.g.:'true' or 'false'
 TARGET_NODE2 - for 2 Node cluster.  E.g.: oradbprd202
 TARGET_NODE3 - for 3 Node Cluster.  E.g.: oradbprd203
-
+```
 Dependencies
 ------------
 SOURCE and TARGET Parameters should use HOSTNAMEs not FQDN (E.g.: ssh database_1)
